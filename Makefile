@@ -1,60 +1,60 @@
-CC = gcc
-CFLAGS = -Wall -Wextra -pedantic -Ofast 
-LIBS += $$(pkg-config --libs openssl) 
-LIBS += -lm
-LIBS += -lthr 
-LIBS += -ljson 
-LIBS += -lcca
+PLATFORM ?= linux_x86_64
+
+SRC=src
+
+CC=gcc
+CFLAGS += -Wall 
+CFLAGS += -Wextra 
+CFLAGS += -pedantic 
+CFLAGS += -O2
+CFLAGS += -I$(SRC)
+
 LIBS += -lalloc
-
-TARGET = libplot.a
-CACHE = .cache
-OUTPUT = $(CACHE)/release
+LIBS += -ljson
 
 
-INCLUDE_PATH=
-LIB_PATH=
-
-
-ifeq ($(UNAME), Linux)	
-	INCLUDE_PATH+=/usr/include/
-	LIB_PATH+=/usr/lib64/
-else
-	INCLUDE_PATH+=/usr/include/
-	LIB_PATH+=/usr/lib/
-endif
+TARGET=libplot.a
+CACHE=.cache
+OUTPUT=$(CACHE)/release
 
 
 MODULES += plot.o
 
 TEST += test.o
 
+-include config/$(PLATFORM).mk
 
 OBJ=$(addprefix $(CACHE)/,$(MODULES))
 T_OBJ=$(addprefix $(CACHE)/,$(TEST))
+
+
+$(CACHE)/%.o:
+	$(CC) $(CFLAGS) -c $< -o $@
 
 
 all: env $(OBJ)
 	ar -crs $(OUTPUT)/$(TARGET) $(OBJ)
 
 
-%.o:
-	$(CC) $(CFLAGS) -c $< -o $@
-
-
 -include dep.list
-
-
-exec: env $(OBJ) $(T_OBJ)
-	$(CC) $(CFLAGS) $(OBJ) $(T_OBJ) $(LIBS) -o $(OUTPUT)/test	
-	$(OUTPUT)/test $(ID) $(PASS)
 
 
 .PHONY: env dep clean install
 
 
 dep:
-	$(CC) -MM  test/*.c -g src/*.c | sed 's|[a-zA-Z0-9_-]*\.o|$(CACHE)/&|' > dep.list
+	$(FIND) src test -name "*.c" | xargs $(CC) -I$(SRC) -MM | sed 's|[a-zA-Z0-9_-]*\.o|$(CACHE)/&|' > dep.list
+
+
+exec: env $(T_OBJ) $(OBJ) 
+	$(CC) $(CFLAGS) $(T_OBJ) $(OBJ) $(LIBS) -o $(OUTPUT)/test
+	$(OUTPUT)/test
+
+
+install:
+	mkdir -pv $(INDIR)
+	cp -v $(OUTPUT)/$(TARGET) $(LIBDIR)/$(TARGET)
+	cp -vr src/plot/*.[h] $(INDIR)
 
 
 env:
@@ -62,13 +62,8 @@ env:
 	mkdir -pv $(OUTPUT)
 
 
-install:
-	cp -v $(OUTPUT)/$(TARGET) $(LIB_PATH)/$(TARGET)
-	cp -v src/plot.h $(INCLUDE_PATH)/plot.h
-
-
 clean: 
 	rm -rvf $(CACHE)
-	rm -vf plot.png
+
 
 

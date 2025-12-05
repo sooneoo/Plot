@@ -8,29 +8,42 @@
 
 
 
-static Plot * __plot_new(size_t width, size_t height, RGBA * color) {
+static Plot __plot(Alloc * alloc, size_t width, bool vflip, bool hflip, size_t height, RGBA * color) {
     size_t size = width * height;
-    Plot * self = malloc(sizeof(Plot) + (size * sizeof(uint32_t)));
 
-    *self = (Plot) {size, width, height};
+    Plot self = (Plot) {
+        .alloc = alloc
+        , .size = size
+        , .width = width
+        , .height = height
+        , .vflip = vflip
+        , .hflip = hflip
+        , .stride = {width, 1}
+        , .pixel = new(alloc, size * sizeof(uint32_t))
+    };
     
-    for(size_t i = 0; i < size; i++)
-        self->pixel[i] = color->dword;
+    for(size_t i = 0; i < size; i++) {
+        self.pixel[i] = color->dword;
+    }
 
     return self;
 }
 
 
-static void __set_pixel(Plot * self, float x, float y, RGBA * color) {
-  if(x < self->width && y < self->height)
-		self->pixel[(size_t) (self->width * y + x)] = color->dword;
+static void set_pixel(Plot * self, float x, float y, RGBA * color) {
+    if(x < self->width && y < self->height) {
+        size_t xs = self->vflip ? self->width - 1 - x: x;
+        size_t ys = self->hflip ? self->height - 1 - y: y;
+        self->pixel[(size_t) ((self->stride[0] * ys) + (self->stride[1] * xs))] = color->dword;
+    }
 }
 
 
 static void __draw_horizontal_line(Plot * self, float x, float y, float length, size_t thickness, RGBA * color) {
 	for(size_t i = 0; i < (size_t) length; i++) { 
-		for(size_t w = 0; w < (size_t) thickness; w++) 
-			__set_pixel(self, x + i, y + w, color);
+		for(size_t w = 0; w < (size_t) thickness; w++) {
+			set_pixel(self, x + i, y + w, color);
+        }
 	}
 }
 
@@ -38,7 +51,7 @@ static void __draw_horizontal_line(Plot * self, float x, float y, float length, 
 static void __draw_vertical_line(Plot * self, float x, float y, float length, size_t thickness, RGBA * color) {
 	for(size_t i = 0; i < (size_t) length; i++) { 
 		for(size_t w = 0; w < (size_t) thickness; w++) 
-			__set_pixel(self, x + w, y + i, color);
+			set_pixel(self, x + w, y + i, color);
 	}
 }
 
@@ -54,7 +67,7 @@ static void __draw_rectangle(Plot * self, float x, float y, float width, float h
 static void __draw_filled_rectangle(Plot * self, float x, float y, float width, float height, RGBA * color) {
 	for(size_t i = 0; i < (size_t) width; i++) {
     	for(size_t j = 0; j < (size_t) height; j++)
-			__set_pixel(self, x + i, y + j, color);
+			set_pixel(self, x + i, y + j, color);
   	}
 }
 
@@ -89,7 +102,7 @@ void __draw_filled_circle(Plot * self, float x, float y, float radius, RGBA * co
     }
 }
 
-
+#if 0
 static void __draw_circle_1px(Plot * self, float x, float y, double radius, RGBA * color) {
     double pixels, a, da, dx, dy;
 
@@ -111,7 +124,7 @@ static void __draw_circle_1px(Plot * self, float x, float y, double radius, RGBA
         dy = sin(a)*radius;
 
         /* Floor to get the pixel coordinate. */
-        __set_pixel(self, floor(x + dx), floor(y + dy), color);
+        set_pixel(self, floor(x + dx), floor(y + dy), color);
     }
 }
 
@@ -122,7 +135,6 @@ static void __draw_circle(Plot * self, float x, float y, double radius, size_t t
 	}
 }
 
-
 static void __draw_filled_circle_with_border(Plot * self, float x, float y, float radius, float border_thickness, RGBA * border_color, RGBA * fill_color) {
 	if(radius >= 2 * border_thickness) {
 		__draw_filled_circle(self, x, y, radius, border_color);
@@ -132,6 +144,7 @@ static void __draw_filled_circle_with_border(Plot * self, float x, float y, floa
 	}
 }
 
+#endif
 
 static void __draw_curve(Plot * self, double x0, double y0, double x1, double y1, int thickness, RGBA * color) {
 	float dx = x1 - x0;
@@ -148,7 +161,7 @@ static void __draw_curve(Plot * self, double x0, double y0, double x1, double y1
 		if(thickness > 1)
 			__draw_filled_rectangle(self, x, y, thickness, thickness, color);
 		else
-			__set_pixel(self, x, y, color);
+			set_pixel(self, x, y, color);
     }
 }
 
@@ -548,7 +561,7 @@ static void __draw_ascii(Plot * self, double topx, double topy, char c, RGBA * c
       		char pixel = ascii_pixel_array[char_index][y][x];
 
       		if(pixel == 1) 
-        		__set_pixel(self, (topx - x) + CHAR_WIDTH,  topy + y, color);
+        		set_pixel(self, (topx - x) + CHAR_WIDTH,  topy + y, color);
     	}
   	}
 }
@@ -568,7 +581,7 @@ static void __draw_rotate_ascii(Plot * self, double topx, double topy, char c, R
       		char pixel = ascii_pixel_array[char_index][y][x];
 
       		if(pixel == 1) {
-        		__set_pixel(self, CHAR_HEIGHT + topx - y,  topy +(CHAR_WIDTH - x - 1) ,  color);
+        		set_pixel(self, CHAR_HEIGHT + topx - y,  topy +(CHAR_WIDTH - x - 1) ,  color);
             }
     	}
   	}
@@ -586,14 +599,13 @@ static size_t __text_width(char * cstr) {
 }
 
 
-static double vector_filter(const vector * data, double(*f)(double, double)) {
-    vector_reset_iterator(data);
+static double iterator_filter(Iterator it, double(*f)(double, double)) {
+    iterator_reset(&it);
+    double result = *((double*) iterator_next(&it));
 
-    double result = *(double*) vector_next(data);
-
-    foreach(data, i) {
-		result = f(result, *(double*) i);
-    }
+    iterate(it, double*, i, {
+		result = f(result, *i);
+    });
 
     return result;
 }
@@ -608,7 +620,7 @@ typedef struct {
 
 
 typedef struct {
-    Plot * plot;
+    Plot plot;
 
     bool show_grid;
     RGBA * grid_color;
@@ -631,7 +643,7 @@ typedef struct {
     char * x_label;
     char * y_label;
     char * title;
-}DisplayArea;
+} DisplayArea;
 
 
 static double __translate_x(DisplayArea * self, double x) {
@@ -704,20 +716,21 @@ static void draw_grid(DisplayArea * self, bool show_grid, RGBA * color) {
 
     for(size_t i = 0, size = ceil((self->max_x - self->min_x)/ step_x); i < size; i ++) {
 
-        double pos = self->min_x + (i * step_x);
+        double pos = self->min_x + (i * step_x) - 1;
         double offset_x = round(__translate_x(self, pos)); 
 		
         snprintf(buffer, 15, "%.1f", pos);
         if(show_grid == true) {
-            if(offset_x != self->padding.left+1 && offset_x != self->plot->width - (self->padding.right - 1)) {
-                if(pos == 0)
-                    __draw_vertical_line(self->plot, offset_x, self->padding.bottom + 1, self->disp_area_height-1, 1, &RGBA_Black);
-                else
-                    __draw_vertical_line(self->plot, offset_x, self->padding.bottom + 1, self->disp_area_height-1, 1, color);
+            if(offset_x != self->padding.left+1 && offset_x != self->plot.width - (self->padding.right - 1)) {
+                if(pos == 0) {
+                    __draw_vertical_line(&self->plot, offset_x, self->padding.bottom + 1, self->disp_area_height-1, 1, &RGBA_Black);
+                } else {
+                    __draw_vertical_line(&self->plot, offset_x, self->padding.bottom + 1, self->disp_area_height-1, 1, color);
+                }
             }
         }
 
-        __draw_text(self->plot, offset_x - __text_width(buffer) / 2, self->padding.bottom - 25, buffer, color);
+        __draw_text(&self->plot, offset_x - __text_width(buffer) / 2, self->padding.bottom - 25, buffer, color);
     }    
 
     for(size_t i = 0, size = ceil((self->max_y - self->min_y)/ step_y); i < size; i ++) {
@@ -727,40 +740,41 @@ static void draw_grid(DisplayArea * self, bool show_grid, RGBA * color) {
         snprintf(buffer, 15, "%.2f", pos);
 
         if(show_grid == true) {
-            if(offset_y != self->padding.bottom + 1 && offset_y != self->plot->height - (self->padding.top - 1)) {
-                if(pos == 0)
-                    __draw_horizontal_line(self->plot, self->padding.left+1, offset_y, self->disp_area_width -1, 1, &RGBA_Black);
-                else
-                    __draw_horizontal_line(self->plot, self->padding.left+1, offset_y, self->disp_area_width -1, 1, color);
+            if(offset_y != self->padding.bottom + 1 && offset_y != self->plot.height - (self->padding.top - 1)) {
+                if(pos == 0) {
+                    __draw_horizontal_line(&self->plot, self->padding.left+1, offset_y, self->disp_area_width -1, 1, &RGBA_Black);
+                } else {
+                    __draw_horizontal_line(&self->plot, self->padding.left+1, offset_y, self->disp_area_width -1, 1, color);
+                }
             }
         }
 
-        __draw_text(self->plot, self->padding.left - __text_width(buffer) - 15, offset_y - (CHAR_HEIGHT / 2), buffer, color);
+        __draw_text(&self->plot, self->padding.left - __text_width(buffer) - 15, offset_y - (CHAR_HEIGHT / 2), buffer, color);
     } 
 }
 
 
 static void draw_display_area(DisplayArea * self) {
-    __draw_rectangle(self->plot, self->padding.left, self->padding.bottom, self->disp_area_width, self->disp_area_height, 1, &RGBA_Black);
+    __draw_rectangle(&self->plot, self->padding.left, self->padding.bottom, self->disp_area_width, self->disp_area_height, 1, &RGBA_Black);
 
 	/*
 	 * draw title
      */
-    __draw_text(self->plot, (self->plot->width - __text_width(self->title)) / 2, self->plot->height - self->padding.top + 15, self->title, &RGBA_Black);
+    __draw_text(&self->plot, (self->plot.width - __text_width(self->title)) / 2, self->plot.height - self->padding.top + 15, self->title, &RGBA_Black);
 
      /*
 	 * draw x axis label
      */
-    __draw_text(self->plot, (self->plot->width - __text_width(self->x_label)) / 2, 15, self->x_label, &RGBA_Black);
+    __draw_text(&self->plot, (self->plot.width - __text_width(self->x_label)) / 2, 15, self->x_label, &RGBA_Black);
 
      /*
 	 * draw y axis label
      */
-    __draw_rotate_text(self->plot, 15, self->plot->height / 2 - __text_width(self->y_label) / 2, self->y_label, &RGBA_Black);
+    __draw_rotate_text(&self->plot, 15, self->plot.height / 2 - __text_width(self->y_label) / 2, self->y_label, &RGBA_Black);
 }
 
 
-Plot * scatter_plot_draw(const vector * xs, const vector * ys) {
+Plot scatter_plot_draw(Alloc * alloc, Iterator xs, Iterator ys) {
     ScatterPlot_Series serie = {
         .line_type = Plot_LineType_Solid
         , .legenda = "Legenda" 
@@ -782,41 +796,43 @@ Plot * scatter_plot_draw(const vector * xs, const vector * ys) {
         , .serie = (ScatterPlot_Series *[]) {&serie}
     };
 
-    return scatter_plot_draw_from_settings(&settings);
+    return scatter_plot_draw_from_settings(alloc, &settings);
 }
 
 
 typedef struct {
     DisplayArea display;
-    
     size_t serie_size;
     ScatterPlot_Series ** serie;
 }ScatterPlot;
 
 
-static inline void __draw_scatter_serie(DisplayArea * self, ScatterPlot_Series * serie) {
-    vector_reset_iterator(serie->xs);
-    vector_reset_iterator(serie->ys);
+static inline void draw_scatter_serie(DisplayArea * self, ScatterPlot_Series * serie) {
+    iterator_reset(&serie->xs);
+    iterator_reset(&serie->ys);
 
-	double * x0 = vector_next(serie->xs);
-	double * y0 = vector_next(serie->ys);
+	double * x0 = iterator_next(&serie->xs);
+	double * y0 = iterator_next(&serie->ys);
 
     assert(x0 != NULL);
     assert(y0 != NULL);
 
     double px0 = __translate_x(self, *x0);
-    double py0 =  __translate_y(self, *y0);
+    double py0 = __translate_y(self, *y0);
 
-    for(double * x1 = vector_next(serie->xs), *y1 = vector_next(serie->ys)
+    for(double * x1 = iterator_next(&serie->xs), *y1 = iterator_next(&serie->ys)
             ; x1 != NULL && y1 != NULL
-            ; x1 = vector_next(serie->xs), y1 = vector_next(serie->ys)) {
+            ; x1 = iterator_next(&serie->xs), y1 = iterator_next(&serie->ys)) {
 		double px1 = __translate_x(self, *x1);
 		double py1 = __translate_y(self, *y1) + self->y_offset;
 
-        __draw_curve(self->plot, px0, py0, px1, py1, serie->line_thickness, &serie->color);
+        __draw_curve(&self->plot, px0, py0, px1, py1, serie->line_thickness, &serie->color);
 
 		px0 = px1;
 		py0 = py1;
+
+        serie->xs.index++;
+        serie->ys.index++;
     }
 }
 
@@ -835,9 +851,9 @@ static void draw_scatter_plot(ScatterPlot * self) {
      * draw background for legenda
      */
     __draw_filled_rectangle(
-            self->display.plot
+            &self->display.plot
             , self->display.padding.left+1
-            , self->display.plot->height - self->display.padding.top-1-legenda_height
+            , self->display.plot.height - self->display.padding.top-1-legenda_height
             , legenda_width
             , legenda_height
             , &RGBA_White);
@@ -846,28 +862,28 @@ static void draw_scatter_plot(ScatterPlot * self) {
     for(size_t i = 0; i < self->serie_size; i++) {
         if(self->serie[i]->legenda != NULL) {
             __draw_horizontal_line(
-                self->display.plot
+                &self->display.plot
                 , self->display.padding.left + 10
-                , self->display.plot->height - self->display.padding.top - (CHAR_HEIGHT*2) - i * (CHAR_HEIGHT + SPACE_WIDTH) + CHAR_HEIGHT / 2
+                , self->display.plot.height - self->display.padding.top - (CHAR_HEIGHT*2) - i * (CHAR_HEIGHT + SPACE_WIDTH) + CHAR_HEIGHT / 2
                 , 15, 3, &self->serie[i]->color);
 
             __draw_text(
-                self->display.plot
+                &self->display.plot
                 , self->display.padding.left + 40
-                , self->display.plot->height - self->display.padding.top - (CHAR_HEIGHT*2) - i * (CHAR_HEIGHT + SPACE_WIDTH)
+                , self->display.plot.height - self->display.padding.top - (CHAR_HEIGHT*2) - i * (CHAR_HEIGHT + SPACE_WIDTH)
                 , self->serie[i]->legenda
                 , &RGBA_Black);
         }
 
-        __draw_scatter_serie(&self->display, self->serie[i]);
+        draw_scatter_serie(&self->display, self->serie[i]);
     }
 }
 
 
-static inline DisplayArea scater_plot_display_area(ScatterPlot_Settings * settings) {
+static inline DisplayArea scater_plot_display_area(Alloc * alloc, ScatterPlot_Settings * settings) {
     DisplayArea display;
 
-    display.plot = __plot_new(settings->width, settings->height, &RGBA_White);
+    display.plot = __plot(alloc, settings->width, settings->vflip, settings->hflip, settings->height, &RGBA_White);
     
     display.show_grid = settings->show_grid;
     display.grid_color = &settings->grid_color;
@@ -889,16 +905,16 @@ static inline DisplayArea scater_plot_display_area(ScatterPlot_Settings * settin
     display.y_label = settings->y_label;
     display.title = settings->title;
 
-	double chart_x_min = vector_filter(settings->serie[0]->xs, fmin);
-	double chart_x_max = vector_filter(settings->serie[0]->xs, fmax);
-	double chart_y_min = vector_filter(settings->serie[0]->ys, fmin);
-	double chart_y_max = vector_filter(settings->serie[0]->ys, fmax);
+	double chart_x_min = iterator_filter(settings->serie[0]->xs, fmin);
+	double chart_x_max = iterator_filter(settings->serie[0]->xs, fmax);
+	double chart_y_min = iterator_filter(settings->serie[0]->ys, fmin);
+	double chart_y_max = iterator_filter(settings->serie[0]->ys, fmax);
 
 	for(size_t i = 1; i < settings->serie_size; i++) {
-		chart_x_min = fmin(chart_x_min, vector_filter(settings->serie[i]->xs, fmin));
-		chart_x_max = fmax(chart_x_max, vector_filter(settings->serie[i]->xs, fmax));
-		chart_y_min = fmin(chart_y_min, vector_filter(settings->serie[i]->ys, fmin));
-		chart_y_max = fmax(chart_y_max, vector_filter(settings->serie[i]->ys, fmax)); 
+		chart_x_min = fmin(chart_x_min, iterator_filter(settings->serie[i]->xs, fmin));
+		chart_x_max = fmax(chart_x_max, iterator_filter(settings->serie[i]->xs, fmax));
+		chart_y_min = fmin(chart_y_min, iterator_filter(settings->serie[i]->ys, fmin));
+		chart_y_max = fmax(chart_y_max, iterator_filter(settings->serie[i]->ys, fmax)); 
 	}
 
     assert(chart_x_min != chart_x_max);
@@ -927,8 +943,6 @@ static inline DisplayArea scater_plot_display_area(ScatterPlot_Settings * settin
 
     display.y_offset = 10;
 
-    //printf("%f %f\n", display.min_y, display.max_y);
-
     display.scale_x = (display.disp_area_width - 2) / chart_width;
     display.scale_y = (display.disp_area_height - 2 - (2 * display.y_offset)) / chart_height;
 
@@ -936,11 +950,11 @@ static inline DisplayArea scater_plot_display_area(ScatterPlot_Settings * settin
 }
 
 
-Plot * scatter_plot_draw_from_settings(ScatterPlot_Settings * settings) {
+Plot scatter_plot_draw_from_settings(Alloc * alloc, ScatterPlot_Settings * settings) {
     assert(settings->serie_size > 0);
 
     ScatterPlot scatter_plot = {
-        .display = scater_plot_display_area(settings)
+        .display = scater_plot_display_area(alloc, settings)
         , .serie_size = settings->serie_size
         , .serie = settings->serie
     };
@@ -953,41 +967,40 @@ Plot * scatter_plot_draw_from_settings(ScatterPlot_Settings * settings) {
 }
 
 
-void plot_delete(Plot * self) {
-    if(self != NULL) {
-        free(self);
+void plot_finalize(Plot * self) {
+    if(self != NULL && self->alloc != NULL) {
+        delete(self->alloc, self->pixel);
     }
 }
 
 
-static void range_reset(Range * self) {
-    self->iterator = self->start;
-}
-
-
-static double * range_next(Range * self) {
-    if(self->iterator < self->end) {
-        self->value = self->iterator;
-        self->iterator += self->step;
-        return &self->value;
+static void * range_next(Iterator * it) {
+    Range * range = it->context;
+    if(range->value < range->end) {
+        range->value += range->step;
+        return &range->value;
     } else {
         return NULL;
     }
 }
 
 
-Range range(double start, double end, double step) {
-    return (Range) {
-        .vector = {
-            .reset_iterator = (void(*)(const vector*)) range_reset
-            , .next = (void*(*)(const vector*)) range_next
-        }
-        , .start = start
-        , .end = end
-        , .step = step
-        , .iterator = start
+static void range_reset(Iterator * it) {
+    Range * range = it->context;
+    range->value = range->start;
+}
+
+
+Iterator range(Range * r) {
+    return (Iterator) {
+        .context = r
+        , .__reset__ = range_reset
+        , .__next__ = range_next
     };
 }
+
+
+
 
 
 

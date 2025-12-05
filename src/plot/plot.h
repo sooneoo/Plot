@@ -4,7 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
-#include <interface/vector.h>
+#include <alloc/alloc.h>
+#include <iterator/iterator.h>
 
 
 typedef union {
@@ -27,13 +28,19 @@ typedef union {
 
 
 typedef struct {
-    size_t size;
+    Alloc * alloc;
+
     size_t width;
     size_t height;
+   
+    size_t stride[2];
 
-    uint32_t pixel[];
+    bool vflip;
+    bool hflip;
+
+    size_t size;
+    uint32_t * pixel;
 }Plot;
-
 
 
 typedef enum {
@@ -42,13 +49,12 @@ typedef enum {
 }Plot_LineType;
 
 
-typedef struct
-{
+typedef struct {
     char * legenda;
     Plot_LineType line_type; 
     double line_thickness;
-    const vector * xs;
-    const vector * ys;
+    Iterator xs;
+    Iterator ys;
     RGBA color;
 }ScatterPlot_Series;
 
@@ -67,9 +73,13 @@ typedef enum {
 }ScatterPlot_Y_Axis;
 
 
+
 typedef struct {
     size_t width;
     size_t height;
+
+    bool vflip;
+    bool hflip;
 
     char * x_label;
     char * y_label;
@@ -89,27 +99,24 @@ typedef struct {
 }ScatterPlot_Settings;
 
 
-Plot * scatter_plot_draw(const vector * xs, const vector * ys);
-Plot * scatter_plot_draw_from_settings(ScatterPlot_Settings * settings);
+Plot scatter_plot_draw(Alloc * alloc, Iterator xs, Iterator ys);
 
 
-void plot_delete(Plot * self);
+Plot scatter_plot_draw_from_settings(Alloc * alloc, ScatterPlot_Settings * settings);
+
+
+void plot_finalize(Plot * self);
 
 
 typedef struct {
-    vector vector;
     double start;
     double end;
     double step;
     double value;
-    double iterator;
-}Range;
+} Range;
 
 
-Range range(double start, double end, double step);
-
-
-#define range_to_vector(T) _Generic((T), Range*: ((const vector*) (T)))
+Iterator range(Range * self);
 
 
 #endif

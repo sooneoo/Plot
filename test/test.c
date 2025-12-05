@@ -1,16 +1,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
-#include <json.h>
-#include <throw.h>
 #include <math.h>
-#include <cca/list.h>
-#include <alloc/alloc.h>
+#include <assert.h>
+#include <alloc/arena.h>
+#include <json/json.h>
 
-#include "../src/plot.h"
-
-
-
+#include "plot/plot.h"
 
 #pragma pack(push, 1)
 typedef struct {
@@ -70,102 +66,110 @@ bool write_as_bmp(Plot * image, char * path) {
 
 
 typedef struct {
+    size_t size;
+    double * value;
+} Vector;
+
+
+static void vector_iterator_reset(Iterator * it) {
+    it->index = 0;
+}
+
+
+static void * vector_iterator_next(Iterator * it) {
+    Vector * vector = it->context;
+    if(it->index < vector->size) {
+        return &vector->value[it->index];
+    } else {
+        return NULL;
+    }
+}
+
+
+static Iterator vector_to_iterator(Vector * self) {
+    return (Iterator) {
+        .context = self
+        , .__reset__ = vector_iterator_reset
+        , .__next__ = vector_iterator_next
+    };
+}
+
+
+typedef struct {
     bool is_value;
-    List value;
+    Vector value;
 }O_Batch; 
 
 
-O_Batch __filter_batch(Json * json, Alloc * alloc, char * key) {
-    List record = list(alloc, sizeof(double));
+O_Batch __filter_batch(Json_Array * json, Alloc * alloc, char * key) {
+    Vector vec = {.size = JSON_ARRAY(json)->size, .value = new(alloc, sizeof(double) * JSON_ARRAY(json)->size)};
+    
+    iterate(json_array_iterator(json), Json_Object *, node, {
+        Json * value = json_object_at(node, key);
+        assert(json_is_type(value, JsonType_Number) == true);
+        vec.value[iterator.index] = strtod(JSON_VALUE(value)->c_str, NULL);
+    }); 
 
-    for(size_t i = 0; i < json->array.size; i++) {
-        if(json_is_type(json_lookup(json->array.value[i], key), JsonFrac) == false) {
-            debug("json dataset format error\n");
-            list_finalize(&record);
-            return (O_Batch) {.is_value = false};
-        }
-
-
-        list_push_back(&record, (double[]) {atof(json_lookup(json->array.value[i], key)->string)});
-    }
-
-    return (O_Batch) {.is_value = true, .value = record};
+    return (O_Batch) {.is_value = true, .value = vec};
 }
 
 
-O_Batch __load_price_batch(char * filename, Alloc * alloc) {
+Json * __load_dataset(Alloc * alloc, char * filename) {
     FILE * f = fopen(filename, "r");
 
-    if(f == NULL) {
-        debug("Can't open dataset file: %s\n", filename);
-        return (O_Batch) {.is_value = false};
-    }
+	assert(f != NULL);
 
-    Json * json = json_parse(f);
+    fseek(f, 0L, SEEK_END);
+    size_t length = ftell(f);
+    fseek(f, 0L, SEEK_SET);
 
-    if(json_is_type(json, JsonArray) == false) {
-        debug("Error reading json file: %s\n", filename);
-        return (O_Batch) {.is_value = false};
-    }
+    char * json_string = new(alloc, length + 1);
+    assert(json_string != NULL);
 
-	O_Batch record = __filter_batch(json, alloc, "open");
+    fread(json_string, sizeof(char), length, f);
+	fclose(f);
+    
+    Json * json = json_deserialize(alloc, json_string);
 
-    json_delete(json);
-
-    return record;
-}
-
-
-Json * __load_dataset(char * filename) {
-    FILE * f = fopen(filename, "r");
-
-    if(f == NULL) {
-        debug("Can't open dataset file\n");
-		return NULL;
-    }
-
-    Json * json = json_parse(f);
-
-    if(json_is_type(json, JsonArray) == false) {
-        debug("Error reading json file\n");
-    }
+    assert(json_is_type(json, JsonType_Array) == true);
 
 	return json;
 }
 
+#define ARENA_HEAP_SIZE 1024 * 10000
 
 bool __show_candle_chart(void) {
-    SysAlloc alloc = sys_alloc();
-	Json * json = __load_dataset("dataset/BITCOIN_M1_500.json");
+    ArenaAlloc alloc = arena_alloc(ARENA_HEAP_SIZE);
 
+	Json * json = __load_dataset(ALLOC(&alloc), "dataset/BITCOIN_M1_500.json");
     if(json == NULL) {
         return false;
     }
 
-	O_Batch batch_open = __filter_batch(json, ALLOC(&alloc), "high");
-	O_Batch batch_close = __filter_batch(json, ALLOC(&alloc), "low");
+	O_Batch batch_open = __filter_batch(JSON_ARRAY(json), ALLOC(&alloc), "high");
+	O_Batch batch_close = __filter_batch(JSON_ARRAY(json), ALLOC(&alloc), "low");
 
     if(batch_open.is_value == false || batch_close.is_value == false) {
         return true;
 	}
 
-    Range range_open = range(0, list_size(&batch_open.value), 1);
-    Range range_close = range(0, list_size(&batch_close.value), 1);
+    Iterator range_open = range(&(Range){.start = 0, .end = batch_open.value.size, .step = 1});
+    Iterator range_close = range(&(Range){.start = 0, .end = batch_close.value.size, .step = 1});
 
     ScatterPlot_Series serie_open = {
         .line_type = Plot_LineType_Solid
-        , .xs = range_to_vector(&range_open)  
-        , .ys = list_to_vector(&batch_open.value)
+        , .xs = range_open  
+        , .ys = vector_to_iterator(&batch_open.value)
         , .legenda = "High price" 
-        , .line_thickness = 1
+        , .line_thickness = 2
         , .color = RGBA(.R=0xFF, .G=0x00, .B=0x20, .A=0xF0)};
 
     ScatterPlot_Series serie_close = {
         .line_type = Plot_LineType_Solid
-        , .xs = range_to_vector(&range_close)
-        , .ys = list_to_vector(&batch_close.value) 
+        , .xs = range_close
+        , .ys = vector_to_iterator(&batch_close.value) 
         , .legenda = "Low price" 
-        , .line_thickness = 1
+        , .line_thickness = 2
         , .color = RGBA(.R=0x00, .G=0xFF, .B=0x20, .A=0xF0)};
 
     ScatterPlot_Settings settings = {
@@ -174,6 +178,8 @@ bool __show_candle_chart(void) {
         , .x_label = "time"
         , .y_label = "price"
         , .title = "BITCOIN"
+        , .vflip = false
+        , .hflip = false
         , .padding_auto = true
         , .show_grid = true
         , .grid_color = RGBA_Gray
@@ -181,19 +187,14 @@ bool __show_candle_chart(void) {
         , .serie = (ScatterPlot_Series *[]) {&serie_open, &serie_close}
     };
 
-    Plot * image = scatter_plot_draw_from_settings(&settings);
+    Plot image = scatter_plot_draw_from_settings(ALLOC(&alloc), &settings);
 
     /*
      * store plot as image
      */
-    if(image != NULL) {
-		write_as_bmp(image, "plot.bmp");
-        plot_delete(image);
-    } else {
-        printf("error in chart rendering\n");
-    }
+    write_as_bmp(&image, "plot.bmp");
+    plot_finalize(&image);
 
-    json_delete(json);
     finalize(ALLOC(&alloc));
 
     return true;
