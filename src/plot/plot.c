@@ -735,7 +735,7 @@ static void draw_grid(DisplayArea * self, bool show_grid, RGBA * color) {
 
     for(size_t i = 0, size = ceil((self->max_y - self->min_y)/ step_y); i < size; i ++) {
         double pos = self->min_y + (i * step_y);
-        double offset_y = round(__translate_y(self, pos)); 
+        double offset_y = round(__translate_y(self, pos + self->y_offset)); 
 
         snprintf(buffer, 15, "%.2f", pos);
 
@@ -824,7 +824,7 @@ static inline void draw_scatter_serie(DisplayArea * self, ScatterPlot_Series * s
             ; x1 != NULL && y1 != NULL
             ; x1 = iterator_next(&serie->xs), y1 = iterator_next(&serie->ys)) {
 		double px1 = __translate_x(self, *x1);
-		double py1 = __translate_y(self, *y1) + self->y_offset;
+		double py1 = __translate_y(self, *y1 +  self->y_offset);
 
         __draw_curve(&self->plot, px0, py0, px1, py1, serie->line_thickness, &serie->color);
 
@@ -932,19 +932,18 @@ static inline DisplayArea scater_plot_display_area(Alloc * alloc, ScatterPlot_Se
         chart_y_max = chart_y_max + padding;
     }
 
-    double chart_width = chart_x_max - chart_x_min;
-    double chart_height = chart_y_max == chart_y_min ? chart_y_max : chart_y_max - chart_y_min;
+    display.y_offset = 10;
 
+    double chart_width = chart_x_max - chart_x_min;
+    double chart_height = (chart_y_max == chart_y_min ? chart_y_max : chart_y_max - chart_y_min) + display.y_offset * 2;
 
 	display.min_x = chart_x_min;
 	display.min_y = chart_y_min;
     display.max_x = chart_x_max;
     display.max_y = chart_y_max;
 
-    display.y_offset = 10;
-
     display.scale_x = (display.disp_area_width - 2) / chart_width;
-    display.scale_y = (display.disp_area_height - 2 - (2 * display.y_offset)) / chart_height;
+    display.scale_y = (display.disp_area_height - 2) / chart_height;
 
     return display;
 }
